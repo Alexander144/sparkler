@@ -52,6 +52,7 @@ class CrawlDbRDD(sc: SparkContext,
     val query = new SolrQuery(generateQry)
     query.addFilterQuery(s"""${Constants.solr.GROUP}:"${escapeQueryChars(partition.group)}"""")
     query.addFilterQuery(s"${Constants.solr.CRAWL_ID}:${job.id}")
+    query.addFilterQuery(s"discover_depth:[0 TO 1]")
     query.set("sort", sortBy)
     query.setRows(batchSize)
 

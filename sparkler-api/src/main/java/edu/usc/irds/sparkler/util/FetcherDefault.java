@@ -1,5 +1,9 @@
 package edu.usc.irds.sparkler.util;
 
+import com.gargoylesoftware.htmlunit.WebClient;
+import com.gargoylesoftware.htmlunit.html.HtmlForm;
+import com.gargoylesoftware.htmlunit.html.HtmlInput;
+import com.gargoylesoftware.htmlunit.html.HtmlPage;
 import edu.usc.irds.sparkler.AbstractExtensionPoint;
 import edu.usc.irds.sparkler.Constants;
 import edu.usc.irds.sparkler.Fetcher;
@@ -10,16 +14,16 @@ import edu.usc.irds.sparkler.model.FetchedData;
 import edu.usc.irds.sparkler.model.Resource;
 import edu.usc.irds.sparkler.model.ResourceStatus;
 import org.apache.commons.io.IOUtils;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.select.Elements;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayOutputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLConnection;
+import javax.net.ssl.HttpsURLConnection;
+import javax.swing.text.html.HTML;
+import java.io.*;
+import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -29,6 +33,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+
+import static java.net.CookiePolicy.ACCEPT_ALL;
 
 /**
  * This class is a default implementation of {@link Fetcher} contract.
@@ -49,6 +55,10 @@ public class FetcherDefault extends AbstractExtensionPoint implements Fetcher, F
     protected List<String> userAgents;
     protected int userAgentIndex = 0; // index for rotating the agents
     protected Map<String, String> httpHeaders;
+
+    private List<HttpCookie> httpCookies;
+    private HttpsURLConnection urlConn;
+    private CookieManager cookieManager;
 
     public FetcherDefault(){}
 
@@ -85,6 +95,32 @@ public class FetcherDefault extends AbstractExtensionPoint implements Fetcher, F
         }
     }
 
+    public void init(JobContext context, String pluginId, String authUrl, String username, String password) throws SparklerException {
+
+        init(context, pluginId);
+        cookieManager = new CookieManager();
+
+        cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ALL);
+        CookieHandler.setDefault(cookieManager);
+        String postParams = null;
+        String page = null;
+        try {
+            page = GetPageContent(authUrl);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        try {
+            postParams = getFormParams(page, username, password);//"agnes@vio.no", "HastingsAgnes");
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+        try {
+            sendPost(authUrl, postParams);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     /**
      * Gets a user agent from a list of configured values, rotates the list for each call
      * @return get a user agent string from the list of configured values
@@ -107,7 +143,8 @@ public class FetcherDefault extends AbstractExtensionPoint implements Fetcher, F
 
     public FetchedData fetch(Resource resource) throws Exception {
         LOG.info("DEFAULT FETCHER {}", resource.getUrl());
-        URLConnection urlConn = new URL(resource.getUrl()).openConnection();
+
+        urlConn = (HttpsURLConnection) new URL(resource.getUrl()).openConnection();
         if (httpHeaders != null){
             httpHeaders.forEach(urlConn::setRequestProperty);
             LOG.debug("Adding headers:{}", httpHeaders.keySet());
@@ -124,7 +161,15 @@ public class FetcherDefault extends AbstractExtensionPoint implements Fetcher, F
 
         urlConn.setConnectTimeout(CONNECT_TIMEOUT);
         urlConn.setReadTimeout(READ_TIMEOUT);
-        int responseCode = ((HttpURLConnection)urlConn).getResponseCode();
+        //Set the cookies
+        if(httpCookies != null) {
+            for (HttpCookie cookie : httpCookies) {
+                urlConn.addRequestProperty("Cookie", cookie.getName() + "=" + cookie.getValue());
+                System.out.println("Cookies added: " + cookie);
+            }
+        }
+
+        int responseCode = ((HttpsURLConnection)urlConn).getResponseCode();
         LOG.debug("STATUS CODE : " + responseCode + " " + resource.getUrl());
         boolean truncated = false;
         try (InputStream inStream = urlConn.getInputStream()) {
@@ -170,5 +215,138 @@ public class FetcherDefault extends AbstractExtensionPoint implements Fetcher, F
             fetchedData.setResource(resource);
             return fetchedData;
         }
+    }
+
+    public void logOut(String url) throws IOException {
+        URL obj = new URL(url);
+        urlConn = (HttpsURLConnection) obj.openConnection();
+        urlConn.setRequestMethod("GET");
+        urlConn.setRequestProperty("User-Agent", USER_AGENT);
+        urlConn.setRequestProperty("Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        urlConn.setRequestProperty("Accept-Language", "en-US,en;q=0.5");
+        urlConn.setInstanceFollowRedirects(false);
+        int responseCode = urlConn.getResponseCode();
+        System.out.println("\nSending 'GET' request to URL : " + url);
+        System.out.println("Response Code : " + responseCode);
+        if(responseCode == 200)
+        {
+            System.out.println("Logged out");
+        }
+        else{
+            System.out.println("Failed to log out");
+        }
+    }
+
+    public void sendPost(String url, String postParams) throws Exception {
+
+        URL obj = new URL(url);
+        urlConn = (HttpsURLConnection) obj.openConnection();
+        String userInfo = postParams;
+        System.out.println("Username and password : " + userInfo);
+        byte[] postData = userInfo.getBytes( StandardCharsets.UTF_8 );
+        // Acts like a browser
+        urlConn.setUseCaches(false);
+        urlConn.setRequestMethod("POST");
+        urlConn.setRequestProperty("Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        urlConn.setRequestProperty("Accept-Language", "en-US,en;q=0.5");
+        urlConn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+
+        urlConn.setDoOutput(true);
+        urlConn.setDoInput(true);
+
+        // Send post request
+        OutputStream wr = urlConn.getOutputStream();
+
+        wr.write(postData);
+        wr.flush();
+        wr.close();
+
+        //urlConn.connect();
+        int responseCode = urlConn.getResponseCode();
+        System.out.println("\nTrying to login on : " + url);
+        httpCookies = cookieManager.getCookieStore().getCookies();
+
+        BufferedReader in =
+                new BufferedReader(new InputStreamReader(urlConn.getInputStream()));
+        String inputLine;
+        StringBuffer response = new StringBuffer();
+
+        if(responseCode == 200)
+        {
+            System.out.println("Login sucess: " + responseCode);
+        }
+        else {
+            System.out.print("Login failed: ");
+            while ((inputLine = in.readLine()) != null) {
+                response.append(inputLine);
+                System.out.println(inputLine);
+            }
+        }
+        in.close();
+    }
+
+    public String getFormParams(String page, String username, String password)
+            throws UnsupportedEncodingException {
+
+        Document doc = Jsoup.parse(page);
+
+        Elements usernameInputs = doc.getElementsByAttributeValue("type", "text");
+        String usernameInputField = usernameInputs.first().attr("name");
+        Elements passwordInputs = doc.getElementsByAttributeValue("type", "password");
+        String passwordInputField = passwordInputs.first().attr("name");
+
+        List<String> paramList = new ArrayList<String>();
+        paramList.add(usernameInputField + "=" + URLEncoder.encode(username, "UTF-8"));
+        paramList.add(passwordInputField + "=" + URLEncoder.encode(password, "UTF-8"));
+
+        System.out.println("UsernameField: " + usernameInputField);
+        System.out.println("PasswordField: " + passwordInputField);
+
+        // build parameters list
+        StringBuilder result = new StringBuilder();
+        for (String param : paramList) {
+            if (result.length() == 0) {
+                result.append(param);
+            } else {
+                result.append("&" + param);
+            }
+        }
+        return result.toString();
+    }
+
+    private String GetPageContent(String url) throws Exception {
+
+        URL obj = new URL(url);
+        urlConn = (HttpsURLConnection) obj.openConnection();
+
+        // default is GET
+        urlConn.setRequestMethod("GET");
+
+        urlConn.setUseCaches(false);
+
+        // act like a browser
+        urlConn.setRequestProperty("User-Agent", USER_AGENT);
+        urlConn.setRequestProperty("Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        urlConn.setRequestProperty("Accept-Language", "en-US,en;q=0.5");
+
+        int responseCode = urlConn.getResponseCode();
+        System.out.println("\nSending 'GET' request to URL : " + url);
+        System.out.println("Response Code : " + responseCode);
+
+        BufferedReader in =
+                new BufferedReader(new InputStreamReader(urlConn.getInputStream()));
+        String inputLine;
+        StringBuffer response = new StringBuffer();
+
+        while ((inputLine = in.readLine()) != null) {
+            response.append(inputLine);
+        }
+        in.close();
+
+        return response.toString();
+
     }
 }

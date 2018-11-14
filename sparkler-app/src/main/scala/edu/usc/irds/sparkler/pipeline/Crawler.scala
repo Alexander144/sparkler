@@ -92,6 +92,23 @@ class Crawler extends CliTool {
   @Option(name = "-aj", handler = classOf[StringArrayOptionHandler], aliases = Array("--add-jars"), usage = "Add sparkler jar to spark context")
   var jarPath : Array[String] = new Array[String](0)
 
+  @Option(name = "-authPage", aliases = Array("--auth"),
+    usage = "Auth site for login to a page")
+  var authPage: String = ""
+
+  @Option(name = "-logutPage", aliases = Array("--logutPage"),
+    usage = "logut site for logut to a page")
+  var logutPage: String = ""
+
+  @Option(name = "-username", aliases = Array("--username"),
+    usage = "Username for login to a page")
+  var username: String = ""
+
+  @Option(name = "-password", aliases = Array("--password"),
+    usage = "Password for login to a page")
+  var password: String = ""
+
+
   /* Generator options, currently not exposed via the CLI
      and only accessible through the config yaml file
    */
@@ -142,7 +159,7 @@ class Crawler extends CliTool {
 
     val localFetchDelay = fetchDelay
     val job = this.job // local variable to bypass serialization
-    FetchFunction.init(job)
+    FetchFunction.init(job, authPage, username, password)
 
     for (itr <- 1 to iterations) {
       val taskId = JobUtil.newSegmentId(true)
@@ -161,12 +178,14 @@ class Crawler extends CliTool {
 
       processFetched(scoredRdd)
 
+
       LOG.info(s"===End of iteration $itr Committing crawldb..===")
       solrc.commitCrawlDb()
     }
 
     solrc.close()
     //PluginService.shutdown(job)
+    FetchFunction.logOut(logutPage)
     LOG.info("Shutting down Spark CTX..")
     sc.stop()
   }
@@ -187,7 +206,9 @@ class Crawler extends CliTool {
     //Step: Store these to nutch segments
     val outputPath = this.outputPath + "/" + job.currentTask
     //Step : write to FS
-    storeContent(outputPath, rdd)
+    //Do not need to storeContent, if you not using it.
+    //Crawler checks on Solr what to fetch and unfetch
+    //storeContent(outputPath, rdd)
 
     rdd
   }
@@ -202,7 +223,7 @@ object OutLinkUpsert extends ((SparklerJob, RDD[CrawlData]) => RDD[Resource]) wi
       .reduceByKey({ case (r1, r2) => if (r1.getDiscoverDepth <= r2.getDiscoverDepth) r1 else r2 }) // pick a parent
       //TODO: url normalize
       .map({ case (link, parent) => new Resource(link, parent.getDiscoverDepth + 1, job, UNFETCHED,
-      parent.getFetchTimestamp, parent.getId, parent.getScore) }) //create a new resource
+      parent.getFetchTimestamp, parent.getId, parent.getScore) }) //create a new resource, parent depth is bigger than 5 do not make new resource
   }
 }
 

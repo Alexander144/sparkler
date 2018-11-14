@@ -35,8 +35,21 @@ object FetchFunction
   val FETCH_TIMEOUT = 1000
   val defaultFetcher = new FetcherDefault
 
-  def init(job:SparklerJob): Unit ={
-    defaultFetcher.init(job,"")
+  def init(job:SparklerJob, authUrl:String, username:String, password:String): Unit ={
+    if(authUrl != "" && username != "" && password != "")
+    {
+      defaultFetcher.init(job, "", authUrl, username, password);
+    }
+    else {
+      defaultFetcher.init(job, "");
+    }
+  }
+
+  def logOut(logoutUrl:String): Unit ={
+    if(logoutUrl != "")
+    {
+      defaultFetcher.logOut(logoutUrl)
+    }
   }
 
   override def apply(job: SparklerJob, resources: Iterator[Resource])
